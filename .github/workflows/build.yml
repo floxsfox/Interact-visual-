@@ -1,0 +1,82 @@
+name: Build Interact Visual APK
+
+# Taruh file ini di: .github/workflows/build-apk.yml
+# ZIP proyek (InteractVisual.zip) cukup di-upload ke root repo; workflow ini
+# mengekstrak dan membangunnya sendiri, tanpa commit hasil ekstrak.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "InteractVisual*.zip"
+      - "input/InteractVisual*.zip"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cari dan ekstrak ZIP proyek
+        run: |
+          ZIP=$(find . -maxdepth 2 -type f -iname 'InteractVisual*.zip' -not -path './.git/*' | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::InteractVisual.zip tidak ditemukan di repo (taruh di root atau folder input/)"
+            exit 1
+          fi
+          echo "Memakai: $ZIP"
+          mkdir -p "$RUNNER_TEMP/src"
+          unzip -q -o "$ZIP" -d "$RUNNER_TEMP/src"
+          SETTINGS=$(find "$RUNNER_TEMP/src" -maxdepth 3 -name settings.gradle.kts | head -n 1)
+          if [ -z "$SETTINGS" ]; then
+            echo "::error::settings.gradle.kts tidak ketemu di dalam ZIP"
+            exit 1
+          fi
+          echo "PROJ=$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Python 3.10 (untuk Chaquopy)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Terima lisensi Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Unduh model hand_landmarker (MediaPipe)
+        run: |
+          mkdir -p "$PROJ/app/src/main/assets"
+          curl -fL --retry 3 -o "$PROJ/app/src/main/assets/hand_landmarker.task" \
+            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+          ls -l "$PROJ/app/src/main/assets/hand_landmarker.task"
+
+      - name: Build APK debug
+        run: |
+          cd "$PROJ"
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Kumpulkan APK
+        run: |
+          mkdir -p out
+          cp "$PROJ"/app/build/outputs/apk/debug/*.apk out/InteractVisual-debug.apk
+          ls -l out
+
+      - name: Unggah APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: InteractVisual-Debug-APK
+          path: out/InteractVisual-debug.apk
+          if-no-files-found: error
+          
